@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-export NEEDRESTART_MODE=a
 set -euo pipefail
 
 # =============================================================================
-# Ubuntu VM Setup Script
+# Ubuntu VM Setup Script (idempotent - safe to run multiple times)
 # Installs: Docker, tmux, Claude Code, Python uv, nvm, ssh-keygen, .bashrc
 # =============================================================================
+
+export NEEDRESTART_MODE=a
+export DEBIAN_FRONTEND=noninteractive
 
 echo "=========================================="
 echo "  Ubuntu VM Setup Script"
@@ -19,57 +21,63 @@ sudo apt-get upgrade -y
 # --- Install Docker (official method from docs.docker.com/engine/install/ubuntu/) ---
 echo "[2/8] Installing Docker..."
 
-# Remove conflicting packages
-sudo apt-get remove -y docker.io docker-doc docker-compose docker-compose-v2 \
-  podman-docker containerd runc 2>/dev/null || true
+if command -v docker &>/dev/null; then
+  echo "  -> Docker already installed: $(docker --version)"
+else
+  # Remove conflicting packages
+  sudo apt-get remove -y docker.io docker-doc docker-compose docker-compose-v2 \
+    podman-docker containerd runc 2>/dev/null || true
 
-# Install prerequisites
-sudo apt-get install -y ca-certificates curl gnupg
+  # Install prerequisites
+  sudo apt-get install -y ca-certificates curl gnupg
 
-# Add Docker's official GPG key
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
+  # Add Docker's official GPG key
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+  sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-# Add Docker repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  # Add Docker repository
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# Install Docker Engine
-sudo apt-get update -y
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  # Install Docker Engine
+  sudo apt-get update -y
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  echo "  -> Docker installed."
+fi
 
-# Add current user to docker group
+# Add current user to docker group (idempotent)
 sudo groupadd docker 2>/dev/null || true
-sudo usermod -aG docker "$USER"
-echo "  -> Docker installed. Added '$USER' to docker group."
+if ! groups "$USER" | grep -q '\bdocker\b'; then
+  sudo usermod -aG docker "$USER"
+  echo "  -> Added '$USER' to docker group."
+else
+  echo "  -> '$USER' already in docker group."
+fi
 
 # --- Install tmux ---
 echo "[3/8] Installing tmux..."
-sudo apt-get install -y tmux
-echo "  -> tmux installed."
-
-# --- Install Claude Code (native installer for all users) ---
-echo "[4/8] Installing Claude Code..."
-curl -fsSL https://claude.ai/install.sh | bash
-echo "  -> Claude Code installed."
-
-# --- Install Python uv (for all users) ---
-echo "[5/8] Installing Python uv..."
-curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR="/usr/local/bin" sh
-# Also install for current user in case system-wide doesn't set up shell integration
-if [ ! -f "/usr/local/bin/uv" ]; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+if command -v tmux &>/dev/null; then
+  echo "  -> tmux already installed: $(tmux -V)"
+else
+  sudo apt-get install -y tmux
+  echo "  -> tmux installed."
 fi
-echo "  -> uv installed."
 
-# --- Install nvm (for all users) ---
-echo "[6/8] Installing nvm..."
+# --- Install nvm (for all users) --- (before Claude Code, so npm is available)
+echo "[4/8] Installing nvm..."
 export NVM_DIR="/usr/local/nvm"
-sudo mkdir -p "$NVM_DIR"
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | sudo NVM_DIR="$NVM_DIR" bash
+
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  echo "  -> nvm already installed at $NVM_DIR."
+else
+  sudo mkdir -p "$NVM_DIR"
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | sudo NVM_DIR="$NVM_DIR" bash
+  sudo chmod -R a+rx "$NVM_DIR"
+  echo "  -> nvm installed."
+fi
 
 # Make nvm available to all users via /etc/profile.d
 sudo tee /etc/profile.d/nvm.sh > /dev/null << 'NVMEOF'
@@ -78,35 +86,67 @@ export NVM_DIR="/usr/local/nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 NVMEOF
 sudo chmod +r /etc/profile.d/nvm.sh
-sudo chmod -R a+rx "$NVM_DIR"
 
-# Install latest LTS Node.js
-export NVM_DIR="/usr/local/nvm"
+# Load nvm and install latest LTS Node.js
 # shellcheck source=/dev/null
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-nvm install --lts 2>/dev/null || true
-echo "  -> nvm installed system-wide at $NVM_DIR."
+if ! command -v node &>/dev/null; then
+  nvm install --lts
+  echo "  -> Node.js LTS installed."
+else
+  echo "  -> Node.js already installed: $(node --version)"
+fi
+
+# --- Install Claude Code (via npm, region-safe) ---
+echo "[5/8] Installing Claude Code..."
+if command -v claude &>/dev/null; then
+  echo "  -> Claude Code already installed."
+else
+  # Try native installer first, fall back to npm
+  INSTALL_SCRIPT=$(curl -fsSL https://claude.ai/install.sh 2>/dev/null || echo "")
+  if echo "$INSTALL_SCRIPT" | head -1 | grep -q '#!/'; then
+    echo "$INSTALL_SCRIPT" | bash
+    echo "  -> Claude Code installed (native)."
+  else
+    echo "  -> Native installer unavailable (region block), using npm..."
+    npm install -g @anthropic-ai/claude-code
+    echo "  -> Claude Code installed (npm)."
+  fi
+fi
+
+# --- Install Python uv ---
+echo "[6/8] Installing Python uv..."
+if command -v uv &>/dev/null; then
+  echo "  -> uv already installed: $(uv --version)"
+else
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  echo "  -> uv installed."
+fi
 
 # --- Generate SSH key ---
 echo "[7/8] Generating SSH key..."
-if [ ! -f "$HOME/.ssh/id_ed25519" ]; then
+if [ -f "$HOME/.ssh/id_ed25519" ]; then
+  echo "  -> SSH key already exists, skipping."
+else
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
   ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N "" -q
   echo "  -> SSH key generated at ~/.ssh/id_ed25519"
-else
-  echo "  -> SSH key already exists, skipping."
 fi
 
 # --- Install .bashrc from github.com/eakot/setup ---
 echo "[8/8] Installing .bashrc from github.com/eakot/setup..."
 BASHRC_URL="https://raw.githubusercontent.com/eakot/setup/main/.bashrc"
-if curl -fsSL "$BASHRC_URL" -o /tmp/.bashrc_eakot 2>/dev/null; then
-  # Backup existing .bashrc
-  if [ -f "$HOME/.bashrc" ]; then
-    cp "$HOME/.bashrc" "$HOME/.bashrc.bak.$(date +%Y%m%d%H%M%S)"
-    echo "  -> Backed up existing .bashrc"
+BASHRC_CONTENT=$(curl -fsSL "$BASHRC_URL" 2>/dev/null || echo "")
+
+if [ -n "$BASHRC_CONTENT" ] && echo "$BASHRC_CONTENT" | head -1 | grep -qv '<!DOCTYPE'; then
+  # Backup existing .bashrc (only once per day to avoid piling up)
+  BACKUP="$HOME/.bashrc.bak.$(date +%Y%m%d)"
+  if [ -f "$HOME/.bashrc" ] && [ ! -f "$BACKUP" ]; then
+    cp "$HOME/.bashrc" "$BACKUP"
+    echo "  -> Backed up existing .bashrc to $BACKUP"
   fi
-  cp /tmp/.bashrc_eakot "$HOME/.bashrc"
-  rm -f /tmp/.bashrc_eakot
+  echo "$BASHRC_CONTENT" > "$HOME/.bashrc"
   echo "  -> .bashrc installed from eakot/setup repo."
 else
   echo "  -> WARNING: Could not download .bashrc from $BASHRC_URL"
@@ -125,5 +165,6 @@ echo "  - Log out and back in (or run 'newgrp docker') to use Docker without sud
 echo "  - Run 'source ~/.bashrc' or open a new shell to load the new .bashrc."
 echo "  - Run 'claude' to start Claude Code and authenticate."
 echo "  - nvm is available system-wide via /etc/profile.d/nvm.sh"
-echo "  - Your SSH public key: $(cat "$HOME/.ssh/id_ed25519.pub" 2>/dev/null || echo 'N/A')"
+echo "  - Your SSH public key:"
+echo "    $(cat "$HOME/.ssh/id_ed25519.pub" 2>/dev/null || echo 'N/A')"
 echo ""
