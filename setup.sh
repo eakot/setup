@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export NEEDRESTART_MODE=a
 set -euo pipefail
 
 # =============================================================================
