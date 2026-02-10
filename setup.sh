@@ -25,12 +25,12 @@ if [ -f /etc/needrestart/needrestart.conf ]; then
 fi
 
 # --- Update system packages ---
-echo "[1/8] Updating system packages..."
+echo "[1/9] Updating system packages..."
 sudo_apt update -y
 sudo_apt upgrade -y
 
 # --- Install Docker (official method from docs.docker.com/engine/install/ubuntu/) ---
-echo "[2/8] Installing Docker..."
+echo "[2/9] Installing Docker..."
 
 if command -v docker &>/dev/null; then
   echo "  -> Docker already installed: $(docker --version)"
@@ -69,7 +69,7 @@ else
 fi
 
 # --- Install tmux ---
-echo "[3/8] Installing tmux..."
+echo "[3/9] Installing tmux..."
 if command -v tmux &>/dev/null; then
   echo "  -> tmux already installed: $(tmux -V)"
 else
@@ -78,14 +78,16 @@ else
 fi
 
 # --- Install nvm (for all users) --- (before Claude Code, so npm is available)
-echo "[4/8] Installing nvm..."
+echo "[4/9] Installing nvm..."
 export NVM_DIR="/usr/local/nvm"
 
 if [ -s "$NVM_DIR/nvm.sh" ]; then
   echo "  -> nvm already installed at $NVM_DIR."
 else
+  NVM_LATEST=$(curl -fsSL https://api.github.com/repos/nvm-sh/nvm/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+  echo "  -> Installing nvm $NVM_LATEST..."
   sudo mkdir -p "$NVM_DIR"
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | sudo NVM_DIR="$NVM_DIR" bash
+  curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_LATEST}/install.sh" | sudo NVM_DIR="$NVM_DIR" bash
   sudo chmod -R a+rx "$NVM_DIR"
   echo "  -> nvm installed."
 fi
@@ -109,7 +111,7 @@ else
 fi
 
 # --- Install Claude Code (via npm, region-safe) ---
-echo "[5/8] Installing Claude Code..."
+echo "[5/9] Installing Claude Code..."
 if command -v claude &>/dev/null; then
   echo "  -> Claude Code already installed."
 else
@@ -126,7 +128,7 @@ else
 fi
 
 # --- Install Python uv ---
-echo "[6/8] Installing Python uv..."
+echo "[6/9] Installing Python uv..."
 if command -v uv &>/dev/null; then
   echo "  -> uv already installed: $(uv --version)"
 else
@@ -135,7 +137,7 @@ else
 fi
 
 # --- Generate SSH key ---
-echo "[7/8] Generating SSH key..."
+echo "[7/9] Generating SSH key..."
 if [ -f "$HOME/.ssh/id_ed25519" ]; then
   echo "  -> SSH key already exists, skipping."
 else
@@ -145,8 +147,25 @@ else
   echo "  -> SSH key generated at ~/.ssh/id_ed25519"
 fi
 
+# --- Configure SSH to prevent session timeouts ---
+echo "[8/9] Configuring SSH keepalive..."
+SSHD_CONFIG="/etc/ssh/sshd_config"
+if ! grep -q "^ClientAliveInterval" "$SSHD_CONFIG" 2>/dev/null; then
+  sudo tee -a "$SSHD_CONFIG" > /dev/null << 'SSHEOF'
+
+# Prevent SSH session timeout
+ClientAliveInterval 60
+ClientAliveCountMax 120
+TCPKeepAlive yes
+SSHEOF
+  sudo systemctl restart sshd 2>/dev/null || sudo systemctl restart ssh 2>/dev/null || true
+  echo "  -> SSH keepalive configured (60s interval, 120 max count)."
+else
+  echo "  -> SSH keepalive already configured."
+fi
+
 # --- Install .bashrc from github.com/eakot/setup ---
-echo "[8/8] Installing .bashrc from github.com/eakot/setup..."
+echo "[9/9] Installing .bashrc from github.com/eakot/setup..."
 BASHRC_URL="https://raw.githubusercontent.com/eakot/setup/main/.bashrc"
 BASHRC_CONTENT=$(curl -fsSL "$BASHRC_URL" 2>/dev/null || echo "")
 
