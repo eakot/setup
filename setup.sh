@@ -81,6 +81,12 @@ fi
 echo "[4/9] Installing nvm..."
 export NVM_DIR="/usr/local/nvm"
 
+# Remove system Node.js to avoid conflicts with nvm
+if dpkg -l nodejs 2>/dev/null | grep -q '^ii'; then
+  echo "  -> Removing system Node.js to avoid conflicts with nvm..."
+  sudo_apt remove -y nodejs npm 2>/dev/null || true
+fi
+
 if [ -s "$NVM_DIR/nvm.sh" ]; then
   echo "  -> nvm already installed at $NVM_DIR."
 else
