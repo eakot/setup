@@ -7,16 +7,27 @@ set -euo pipefail
 # =============================================================================
 
 export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 export DEBIAN_FRONTEND=noninteractive
+
+# Make these env vars survive sudo
+sudo_apt() {
+  sudo NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get "$@"
+}
 
 echo "=========================================="
 echo "  Ubuntu VM Setup Script"
 echo "=========================================="
 
+# Disable needrestart interactive mode permanently
+if [ -f /etc/needrestart/needrestart.conf ]; then
+  sudo sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+fi
+
 # --- Update system packages ---
 echo "[1/8] Updating system packages..."
-sudo apt-get update -y
-sudo apt-get upgrade -y
+sudo_apt update -y
+sudo_apt upgrade -y
 
 # --- Install Docker (official method from docs.docker.com/engine/install/ubuntu/) ---
 echo "[2/8] Installing Docker..."
@@ -25,11 +36,11 @@ if command -v docker &>/dev/null; then
   echo "  -> Docker already installed: $(docker --version)"
 else
   # Remove conflicting packages
-  sudo apt-get remove -y docker.io docker-doc docker-compose docker-compose-v2 \
+  sudo_apt remove -y docker.io docker-doc docker-compose docker-compose-v2 \
     podman-docker containerd runc 2>/dev/null || true
 
   # Install prerequisites
-  sudo apt-get install -y ca-certificates curl gnupg
+  sudo_apt install -y ca-certificates curl gnupg
 
   # Add Docker's official GPG key
   sudo install -m 0755 -d /etc/apt/keyrings
@@ -43,8 +54,8 @@ else
     sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
   # Install Docker Engine
-  sudo apt-get update -y
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  sudo_apt update -y
+  sudo_apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   echo "  -> Docker installed."
 fi
 
@@ -62,7 +73,7 @@ echo "[3/8] Installing tmux..."
 if command -v tmux &>/dev/null; then
   echo "  -> tmux already installed: $(tmux -V)"
 else
-  sudo apt-get install -y tmux
+  sudo_apt install -y tmux
   echo "  -> tmux installed."
 fi
 
