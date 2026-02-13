@@ -10,6 +10,10 @@ export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
 export DEBIAN_FRONTEND=noninteractive
 
+# Detect real user when run via sudo
+REAL_USER="${SUDO_USER:-$(whoami)}"
+REAL_HOME=$(eval echo "~$REAL_USER")
+
 # Make these env vars survive sudo
 sudo_apt() {
   sudo NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get "$@"
@@ -61,11 +65,11 @@ fi
 
 # Add current user to docker group (idempotent)
 sudo groupadd docker 2>/dev/null || true
-if ! groups "$USER" | grep -q '\bdocker\b'; then
-  sudo usermod -aG docker "$USER"
-  echo "  -> Added '$USER' to docker group."
+if ! groups "$REAL_USER" | grep -q '\bdocker\b'; then
+  sudo usermod -aG docker "$REAL_USER"
+  echo "  -> Added '$REAL_USER' to docker group."
 else
-  echo "  -> '$USER' already in docker group."
+  echo "  -> '$REAL_USER' already in docker group."
 fi
 
 # --- Install tmux ---
@@ -144,12 +148,13 @@ fi
 
 # --- Generate SSH key ---
 echo "[7/9] Generating SSH key..."
-if [ -f "$HOME/.ssh/id_ed25519" ]; then
+if [ -f "$REAL_HOME/.ssh/id_ed25519" ]; then
   echo "  -> SSH key already exists, skipping."
 else
-  mkdir -p "$HOME/.ssh"
-  chmod 700 "$HOME/.ssh"
-  ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N "" -q
+  mkdir -p "$REAL_HOME/.ssh"
+  chmod 700 "$REAL_HOME/.ssh"
+  ssh-keygen -t ed25519 -f "$REAL_HOME/.ssh/id_ed25519" -N "" -q
+  chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.ssh"
   echo "  -> SSH key generated at ~/.ssh/id_ed25519"
 fi
 
@@ -177,12 +182,13 @@ BASHRC_CONTENT=$(curl -fsSL "$BASHRC_URL" 2>/dev/null || echo "")
 
 if [ -n "$BASHRC_CONTENT" ] && echo "$BASHRC_CONTENT" | head -1 | grep -qv '<!DOCTYPE'; then
   # Backup existing .bashrc (only once per day to avoid piling up)
-  BACKUP="$HOME/.bashrc.bak.$(date +%Y%m%d)"
-  if [ -f "$HOME/.bashrc" ] && [ ! -f "$BACKUP" ]; then
-    cp "$HOME/.bashrc" "$BACKUP"
+  BACKUP="$REAL_HOME/.bashrc.bak.$(date +%Y%m%d)"
+  if [ -f "$REAL_HOME/.bashrc" ] && [ ! -f "$BACKUP" ]; then
+    cp "$REAL_HOME/.bashrc" "$BACKUP"
     echo "  -> Backed up existing .bashrc to $BACKUP"
   fi
-  echo "$BASHRC_CONTENT" > "$HOME/.bashrc"
+  echo "$BASHRC_CONTENT" > "$REAL_HOME/.bashrc"
+  chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.bashrc"
   echo "  -> .bashrc installed from eakot/setup repo."
 else
   echo "  -> WARNING: Could not download .bashrc from $BASHRC_URL"
@@ -202,5 +208,5 @@ echo "  - Run 'source ~/.bashrc' or open a new shell to load the new .bashrc."
 echo "  - Run 'claude' to start Claude Code and authenticate."
 echo "  - nvm is available system-wide via /etc/profile.d/nvm.sh"
 echo "  - Your SSH public key:"
-echo "    $(cat "$HOME/.ssh/id_ed25519.pub" 2>/dev/null || echo 'N/A')"
+echo "    $(cat "$REAL_HOME/.ssh/id_ed25519.pub" 2>/dev/null || echo 'N/A')"
 echo ""
